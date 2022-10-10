@@ -34,7 +34,6 @@ import (
 )
 
 func init() {
-	log.Initialize(New())
 }
 
 const (
