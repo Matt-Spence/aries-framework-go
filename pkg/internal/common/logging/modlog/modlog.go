@@ -11,6 +11,12 @@ import (
 	"github.com/hyperledger/aries-framework-go/spi/log"
 )
 
+const (
+	logLevelFormatter   = "UTC %s-> %s "
+	logPrefixFormatter  = " [%s] "
+	callerInfoFormatter = "- %s "
+)
+
 // NewModLog returns new moduled logger instance based on given logger implementation and module.
 func NewModLog(logger log.Logger, module string) *ModLog {
 	return &ModLog{logger: logger, module: module}
