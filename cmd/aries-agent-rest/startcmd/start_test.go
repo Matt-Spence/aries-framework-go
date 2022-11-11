@@ -23,7 +23,6 @@ import (
 
 	"github.com/hyperledger/aries-framework-go/pkg/common/log"
 	"github.com/hyperledger/aries-framework-go/pkg/didcomm/transport"
-	spi "github.com/hyperledger/aries-framework-go/spi/log"
 )
 
 type mockServer struct{}
@@ -431,27 +430,27 @@ func TestStartCmdWithLogLevel(t *testing.T) {
 	t.Run("validate log level", func(t *testing.T) {
 		err := setLogLevel("DEBUG")
 		require.NoError(t, err)
-		require.Equal(t, spi.DEBUG, log.GetLevel(""))
+		require.Equal(t, log.DEBUG, log.GetLevel(""))
 
 		err = setLogLevel("WARNING")
 		require.NoError(t, err)
-		require.Equal(t, spi.WARNING, log.GetLevel(""))
+		require.Equal(t, log.WARNING, log.GetLevel(""))
 
 		err = setLogLevel("CRITICAL")
 		require.NoError(t, err)
-		require.Equal(t, spi.CRITICAL, log.GetLevel(""))
+		require.Equal(t, log.CRITICAL, log.GetLevel(""))
 
 		err = setLogLevel("ERROR")
 		require.NoError(t, err)
-		require.Equal(t, spi.ERROR, log.GetLevel(""))
+		require.Equal(t, log.ERROR, log.GetLevel(""))
 
 		err = setLogLevel("INFO")
 		require.NoError(t, err)
-		require.Equal(t, spi.INFO, log.GetLevel(""))
+		require.Equal(t, log.INFO, log.GetLevel(""))
 
 		err = setLogLevel("")
 		require.NoError(t, err)
-		require.Equal(t, spi.INFO, log.GetLevel(""))
+		require.Equal(t, log.INFO, log.GetLevel(""))
 
 		err = setLogLevel("INVALID")
 		require.Error(t, err)
@@ -997,7 +996,7 @@ func TestNewAgentParametersUsingEnv(t *testing.T) {
 	parameters, err := NewAgentParameters(&mockServer{}, nil)
 
 	require.Nil(t, err)
-	require.Equal(t, spi.DEBUG, log.GetLevel(""))
+	require.Equal(t, log.DEBUG, log.GetLevel(""))
 	require.Equal(t, "agentHost", parameters.host)
 	require.Equal(t, "agentToken", parameters.token)
 	require.Equal(t, "agentInboundHost", parameters.inboundHostInternals[0])

@@ -26,7 +26,6 @@ func TestCommonLogs(t *testing.T) {
 		CloseResponseBodyError(logger.Info, errors.New("response body error"))
 
 		require.Contains(t, stdOut.Buffer.String(), `Error closing response body`)
-		require.Contains(t, stdOut.Buffer.String(), `"service": "myservice"`)
 		require.Contains(t, stdOut.Buffer.String(), `"error": "response body error"`)
 	})
 }

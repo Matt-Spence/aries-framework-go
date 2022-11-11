@@ -26,7 +26,7 @@ func TestStandardFields(t *testing.T) {
 
 		logger.Error("Sample error", WithError(errors.New("some error")))
 
-		require.Contains(t, stdErr.Buffer.String(), `Sample error	{"service": "myservice", "error": "some error"}`)
+		require.Contains(t, stdErr.Buffer.String(), `Sample error	{"error": "some error"}`)
 	})
 
 	t.Run("json error", func(t *testing.T) {
