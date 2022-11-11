@@ -7,151 +7,410 @@ SPDX-License-Identifier: Apache-2.0
 package log
 
 import (
+	"errors"
+	"fmt"
+	"os"
+	"strings"
 	"sync"
 
-	"github.com/hyperledger/aries-framework-go/pkg/internal/common/logging/metadata"
-	"github.com/hyperledger/aries-framework-go/spi/log"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
-//nolint:lll
 const (
-	// loggerNotInitializedMsg is used when a logger is not initialized before logging.
-	loggerNotInitializedMsg = "Default logger initialized (please call log.Initialize() if you wish to use a custom logger)"
-	loggerModule            = "aries-framework/common"
+	timestampKey  = "time"
+	levelKey      = "level"
+	moduleKey     = "logger"
+	callerKey     = "caller"
+	messageKey    = "msg"
+	stacktraceKey = "stacktrace"
 )
 
-// Log is an implementation of Logger interface.
-// It encapsulates default or custom logger to provide module and level based logging.
+// DefaultEncoding sets the default logger encoding.
+// It may be overridden at build time using the -ldflags option.
+//nolint:gochecknoglobals
+var DefaultEncoding = Console
+
+// Level defines a log level for logging messages.
+type Level int
+
+// String returns string representation of given log level.
+func (l Level) String() string {
+	switch l {
+	case DEBUG:
+		return "DEBUG"
+	case INFO:
+		return "INFO"
+	case WARNING:
+		return "WARN"
+	case ERROR:
+		return "ERROR"
+	case PANIC:
+		return "PANIC"
+	case FATAL:
+		return "FATAL"
+	default:
+		return fmt.Sprintf("Level(%d)", l)
+	}
+}
+
+// ParseLevel returns the level from the given string.
+func ParseLevel(level string) (Level, error) {
+	switch level {
+	case "DEBUG", "debug":
+		return DEBUG, nil
+	case "INFO", "info":
+		return INFO, nil
+	case "WARN", "warn", "WARNING", "warning":
+		return WARNING, nil
+	case "ERROR", "error":
+		return ERROR, nil
+	case "PANIC", "panic":
+		return PANIC, nil
+	case "FATAL", "fatal":
+		return FATAL, nil
+	default:
+		return ERROR, errors.New("logger: invalid log level")
+	}
+}
+
+// Log levels.
+const (
+	DEBUG   = Level(zapcore.DebugLevel)
+	INFO    = Level(zapcore.InfoLevel)
+	WARNING = Level(zapcore.WarnLevel)
+	ERROR   = Level(zapcore.ErrorLevel)
+	PANIC   = Level(zapcore.PanicLevel)
+	FATAL   = Level(zapcore.FatalLevel)
+
+	minLogLevel  = DEBUG
+	defaultLevel = INFO
+)
+
+var levels = newModuleLevels() //nolint:gochecknoglobals
+
+type options struct {
+	encoding Encoding
+	stdOut   zapcore.WriteSyncer
+	stdErr   zapcore.WriteSyncer
+	fields   []zap.Field
+}
+
+// Encoding defines the log encoding.
+type Encoding = string
+
+// Log encodings.
+const (
+	Console Encoding = "console"
+	JSON    Encoding = "json"
+)
+
+const defaultModuleName = ""
+
+// Option is a logger option.
+type Option func(o *options)
+
+// WithStdOut sets the output for logs of type DEBUG, INFO, and WARN.
+func WithStdOut(stdOut zapcore.WriteSyncer) Option {
+	return func(o *options) {
+		o.stdOut = stdOut
+	}
+}
+
+// WithStdErr sets the output for logs of type ERROR, PANIC, and FATAL.
+func WithStdErr(stdErr zapcore.WriteSyncer) Option {
+	return func(o *options) {
+		o.stdErr = stdErr
+	}
+}
+
+// WithFields sets the fields that will be output with every log.
+func WithFields(fields ...zap.Field) Option {
+	return func(o *options) {
+		o.fields = fields
+	}
+}
+
+// WithEncoding sets the output encoding (console or json).
+func WithEncoding(encoding Encoding) Option {
+	return func(o *options) {
+		o.encoding = encoding
+	}
+}
+
+// Log uses the Zap SugaredLogger to log messages.
 type Log struct {
-	instance log.Logger
+	*zap.SugaredLogger
+	module string
+}
+
+// New creates a Logger implementation based on given module name.
+func New(module string, opts ...Option) *Log {
+	options := getOptions(opts)
+
+	return &Log{
+		SugaredLogger: newZap(module, options.encoding, options.stdOut, options.stdErr).With(options.fields...).Sugar(),
+		module:        module,
+	}
+}
+
+// IsEnabled returns true if given log level is enabled.
+func (l *Log) IsEnabled(level Level) bool {
+	return levels.isEnabled(l.module, level)
+}
+
+// StructuredLog uses the Zap Logger to log messages in a structured way.
+type StructuredLog struct {
+	*zap.Logger
+	module string
+}
+
+// NewStructured creates a structured Logger implementation based on given module name.
+func NewStructured(module string, opts ...Option) *StructuredLog {
+	options := getOptions(opts)
+
+	return &StructuredLog{
+		Logger: newZap(module, options.encoding, options.stdOut, options.stdErr).With(options.fields...),
+		module: module,
+	}
+}
+
+// IsEnabled returns true if given log level is enabled.
+func (l *StructuredLog) IsEnabled(level Level) bool {
+	return levels.isEnabled(l.module, level)
+}
+
+// SetLevel sets the log level for given module and level.
+func SetLevel(module string, level Level) {
+	levels.Set(module, level)
+}
+
+// SetDefaultLevel sets the default log level.
+func SetDefaultLevel(level Level) {
+	levels.SetDefault(level)
+}
+
+// GetLevel returns the log level for the given module.
+func GetLevel(module string) Level {
+	return levels.Get(module)
+}
+
+// SetSpec sets the log levels for individual modules as well as the default log level.
+// The format of the spec is as follows:
+//
+//	  module1=level1:module2=level2:module3=level3:defaultLevel
+//
+// Valid log levels are: critical, error, warning, info, debug
+//
+// Example:
+//    module1=error:module2=debug:module3=warning:info
+//
+func SetSpec(spec string) error {
+	logLevelByModule := strings.Split(spec, ":")
+
+	defaultLogLevel := minLogLevel - 1
+
+	var moduleLevelPairs []moduleLevelPair
+
+	for _, logLevelByModulePart := range logLevelByModule {
+		if strings.Contains(logLevelByModulePart, "=") {
+			moduleAndLevelPair := strings.Split(logLevelByModulePart, "=")
+
+			logLevel, err := ParseLevel(moduleAndLevelPair[1])
+			if err != nil {
+				return err
+			}
+
+			moduleLevelPairs = append(moduleLevelPairs,
+				moduleLevelPair{moduleAndLevelPair[0], logLevel})
+		} else {
+			if defaultLogLevel >= minLogLevel {
+				return errors.New("multiple default values found")
+			}
+
+			level, err := ParseLevel(logLevelByModulePart)
+			if err != nil {
+				return err
+			}
+
+			defaultLogLevel = level
+		}
+	}
+
+	if defaultLogLevel >= minLogLevel {
+		levels.Set("", defaultLogLevel)
+	} else {
+		levels.Set("", INFO)
+	}
+
+	for _, moduleLevelPair := range moduleLevelPairs {
+		levels.Set(moduleLevelPair.module, moduleLevelPair.logLevel)
+	}
+
+	return nil
+}
+
+// GetSpec returns the log spec which specifies the log level of each individual module. The spec is
+// in the following format:
+//
+//	  module1=level1:module2=level2:module3=level3:defaultLevel
+//
+// Example:
+//    module1=error:module2=debug:module3=warning:info
+//
+func GetSpec() string {
+	var spec string
+
+	var defaultDebugLevel string
+
+	for module, level := range getAllLevels() {
+		if module == "" {
+			defaultDebugLevel = level.String()
+		} else {
+			spec += fmt.Sprintf("%s=%s:", module, level.String())
+		}
+	}
+
+	return spec + defaultDebugLevel
+}
+
+func getAllLevels() map[string]Level {
+	metadataLevels := levels.All()
+
+	// Convert to the Level type in this package
+	levels := make(map[string]Level)
+	for module, logLevel := range metadataLevels {
+		levels[module] = logLevel
+	}
+
+	return levels
+}
+
+type moduleLevelPair struct {
 	module   string
-	once     sync.Once
+	logLevel Level
 }
 
-// New creates and returns a Logger implementation based on given module name.
-// note: the underlying logger instance is lazy initialized on first use.
-// To use your own logger implementation provide logger provider in 'Initialize()' before logging any line.
-// If 'Initialize()' is not called before logging any line then default logging implementation will be used.
-func New(module string) *Log {
-	return &Log{module: module}
+func newModuleLevels() *moduleLevels {
+	return &moduleLevels{levels: make(map[string]Level)}
 }
 
-// Fatalf calls Fatalf function of underlying logger
-// should possibly cause system shutdown based on implementation.
-func (l *Log) Fatalf(msg string, args ...interface{}) {
-	l.logger().Fatalf(msg, args...)
+// moduleLevels maintains log levels based on modules.
+type moduleLevels struct {
+	levels  map[string]Level
+	rwmutex sync.RWMutex
 }
 
-// Panicf calls Panic function of underlying logger
-// should possibly cause panic based on implementation.
-func (l *Log) Panicf(msg string, args ...interface{}) {
-	l.logger().Panicf(msg, args...)
+// Get returns the log level for given module and level.
+func (l *moduleLevels) Get(module string) Level {
+	l.rwmutex.RLock()
+	defer l.rwmutex.RUnlock()
+
+	level, exists := l.levels[module]
+	if !exists {
+		level, exists = l.levels[defaultModuleName]
+		// no configuration exists, default to info
+		if !exists {
+			return defaultLevel
+		}
+	}
+
+	return level
 }
 
-// Debugf calls Debugf function of underlying logger.
-func (l *Log) Debugf(msg string, args ...interface{}) {
-	l.logger().Debugf(msg, args...)
+// All returns all set log levels.
+func (l *moduleLevels) All() map[string]Level {
+	l.rwmutex.RLock()
+	levels := l.levels
+	l.rwmutex.RUnlock()
+
+	levelsCopy := make(map[string]Level)
+
+	for module, logLevel := range levels {
+		levelsCopy[module] = logLevel
+	}
+
+	return levelsCopy
 }
 
-// Infof calls Infof function of underlying logger.
-func (l *Log) Infof(msg string, args ...interface{}) {
-	l.logger().Infof(msg, args...)
+func (l *moduleLevels) Set(module string, level Level) {
+	l.rwmutex.Lock()
+	l.levels[module] = level
+	l.rwmutex.Unlock()
 }
 
-// Warnf calls Warnf function of underlying logger.
-func (l *Log) Warnf(msg string, args ...interface{}) {
-	l.logger().Warnf(msg, args...)
+func (l *moduleLevels) SetDefault(level Level) {
+	l.Set(defaultModuleName, level)
 }
 
-// Errorf calls Errorf function of underlying logger.
-func (l *Log) Errorf(msg string, args ...interface{}) {
-	l.logger().Errorf(msg, args...)
+// isEnabled will return true if logging is enabled for given module and level.
+func (l *moduleLevels) isEnabled(module string, level Level) bool {
+	return level >= l.Get(module)
 }
 
-func (l *Log) logger() log.Logger {
-	l.once.Do(func() {
-		l.instance = loggerProvider().GetLogger(l.module)
-	})
+func newZap(module string, encoding Encoding, stdOut, stdErr zapcore.WriteSyncer) *zap.Logger {
+	encoder := newZapEncoder(encoding)
 
-	return l.instance
+	core := zapcore.NewTee(
+		zapcore.NewCore(encoder, zapcore.Lock(stdErr),
+			zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
+				return lvl >= zapcore.ErrorLevel && levels.isEnabled(module, Level(lvl))
+			}),
+		),
+		zapcore.NewCore(encoder, zapcore.Lock(stdOut),
+			zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
+				return lvl < zapcore.ErrorLevel && levels.isEnabled(module, Level(lvl))
+			}),
+		),
+	)
+
+	return zap.New(core, zap.AddCaller()).Named(module)
 }
 
-// SetLevel - setting log level for given module
-//  Parameters:
-//  module is module name
-//  level is logging level
-//
-// If not set default logging level is info.
-func SetLevel(module string, level log.Level) {
-	metadata.SetLevel(module, level)
+func newZapEncoder(encoding Encoding) zapcore.Encoder {
+	defaultCfg := zapcore.EncoderConfig{
+		TimeKey:        timestampKey,
+		LevelKey:       levelKey,
+		NameKey:        moduleKey,
+		CallerKey:      callerKey,
+		FunctionKey:    zapcore.OmitKey,
+		MessageKey:     messageKey,
+		StacktraceKey:  stacktraceKey,
+		LineEnding:     zapcore.DefaultLineEnding,
+		EncodeLevel:    zapcore.CapitalLevelEncoder,
+		EncodeTime:     zapcore.ISO8601TimeEncoder,
+		EncodeDuration: zapcore.StringDurationEncoder,
+		EncodeCaller:   zapcore.ShortCallerEncoder,
+	}
+
+	switch strings.ToLower(encoding) {
+	case JSON:
+		cfg := defaultCfg
+		cfg.EncodeLevel = zapcore.LowercaseLevelEncoder
+
+		return zapcore.NewJSONEncoder(cfg)
+	case Console:
+		cfg := defaultCfg
+		cfg.EncodeName = func(moduleName string, encoder zapcore.PrimitiveArrayEncoder) {
+			encoder.AppendString(fmt.Sprintf("[%s]", moduleName))
+		}
+
+		return zapcore.NewConsoleEncoder(cfg)
+	default:
+		panic("unsupported encoding " + encoding)
+	}
 }
 
-// GetLevel - getting log level for given module
-//  Parameters:
-//  module is module name
-//
-//  Returns:
-//  logging level
-//
-// If not set default logging level is info.
-func GetLevel(module string) log.Level {
-	return metadata.GetLevel(module)
-}
+func getOptions(opts []Option) *options {
+	options := &options{
+		encoding: DefaultEncoding,
+		stdOut:   os.Stdout,
+		stdErr:   os.Stderr,
+	}
 
-// IsEnabledFor - Check if given log level is enabled for given module
-//  Parameters:
-//  module is module name
-//  level is logging level
-//
-//  Returns:
-//  is logging enabled for this module and level
-//
-// If not set default logging level is info.
-func IsEnabledFor(module string, level log.Level) bool {
-	return metadata.IsEnabledFor(module, level)
-}
+	for _, opt := range opts {
+		opt(options)
+	}
 
-// ParseLevel returns the log level from a string representation.
-//  Parameters:
-//  level is logging level in string representation
-//
-//  Returns:
-//  logging level
-func ParseLevel(level string) (log.Level, error) {
-	l, err := metadata.ParseLevel(level)
-
-	return l, err
-}
-
-// ShowCallerInfo - Show caller info in log lines for given log level and module
-//  Parameters:
-//  module is module name
-//  level is logging level
-//
-// note: based on implementation of custom logger, callerinfo info may not be available for custom logging provider
-func ShowCallerInfo(module string, level log.Level) {
-	metadata.ShowCallerInfo(module, level)
-}
-
-// HideCallerInfo - Do not show caller info in log lines for given log level and module
-//  Parameters:
-//  module is module name
-//  level is logging level
-//
-// note: based on implementation of custom logger, callerinfo info may not be available for custom logging provider
-func HideCallerInfo(module string, level log.Level) {
-	metadata.HideCallerInfo(module, level)
-}
-
-// IsCallerInfoEnabled - returns if caller info enabled for given log level and module
-//  Parameters:
-//  module is module name
-//  level is logging level
-//
-//  Returns:
-//  is caller info enabled for this module and level
-//
-// note: based on implementation of custom logger, callerinfo info may not be available for custom logging provider
-func IsCallerInfoEnabled(module string, level log.Level) bool {
-	return metadata.IsCallerInfoEnabled(module, level)
+	return options
 }

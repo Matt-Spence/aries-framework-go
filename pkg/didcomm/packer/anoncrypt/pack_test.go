@@ -41,7 +41,6 @@ import (
 	mockstorage "github.com/hyperledger/aries-framework-go/pkg/mock/storage"
 	mockvdr "github.com/hyperledger/aries-framework-go/pkg/mock/vdr"
 	"github.com/hyperledger/aries-framework-go/pkg/secretlock/noop"
-	spilog "github.com/hyperledger/aries-framework-go/spi/log"
 )
 
 func TestAnoncryptPackerSuccess(t *testing.T) {
@@ -135,7 +134,7 @@ func TestAnoncryptPackerSuccess(t *testing.T) {
 			t.Logf("anoncrypt packing - creating recipient %s keys...", tc.keyType)
 			_, recDIDKeys, recipientsKeys, keyHandles := createRecipientsByKeyType(t, k, 3, tc.keyType)
 
-			log.SetLevel("aries-framework/pkg/didcomm/packer/anoncrypt", spilog.DEBUG)
+			log.SetLevel("aries-framework/pkg/didcomm/packer/anoncrypt", log.DEBUG)
 
 			cryptoSvc, err := tinkcrypto.New()
 			require.NoError(t, err)
@@ -200,7 +199,7 @@ func verifyJWETypes(t *testing.T, cty string, jweHeader afgjose.Headers) {
 }
 
 func TestAnoncryptPackerSuccessWithDifferentCurvesSuccess(t *testing.T) {
-	log.SetLevel("aries-framework/pkg/didcomm/packer/anoncrypt", spilog.DEBUG)
+	log.SetLevel("aries-framework/pkg/didcomm/packer/anoncrypt", log.DEBUG)
 
 	k := createKMS(t)
 	_, recDIDKeys, recipientsKey1, keyHandles1 := createRecipients(t, k, 1)

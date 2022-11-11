@@ -23,7 +23,6 @@ type Options struct {
 	TransportReturnRoute string
 	LoadRemoteDocuments  bool
 	LogLevel             string
-	Logger               api.LoggerProvider
 	Storage              api.Provider
 	DocumentLoader       ld.DocumentLoader
 	MsgHandler           *msghandler.Registrar

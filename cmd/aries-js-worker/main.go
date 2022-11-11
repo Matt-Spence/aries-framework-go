@@ -33,10 +33,6 @@ import (
 	spilog "github.com/hyperledger/aries-framework-go/spi/log"
 )
 
-func init() {
-	log.Initialize(New())
-}
-
 const (
 	wasmStartupTopic = "asset-ready"
 	handleResultFn   = "handleResult"

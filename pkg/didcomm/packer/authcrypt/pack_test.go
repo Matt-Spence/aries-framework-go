@@ -41,7 +41,6 @@ import (
 	mockprovider "github.com/hyperledger/aries-framework-go/pkg/mock/provider"
 	mockstorage "github.com/hyperledger/aries-framework-go/pkg/mock/storage"
 	"github.com/hyperledger/aries-framework-go/pkg/secretlock/noop"
-	spilog "github.com/hyperledger/aries-framework-go/spi/log"
 )
 
 func TestAuthcryptPackerSuccess(t *testing.T) {
@@ -138,7 +137,7 @@ func TestAuthcryptPackerSuccess(t *testing.T) {
 			t.Logf("authcrypt packing - creating recipient %s keys...", tc.keyType)
 			_, recDIDKeys, recipientsKeys, keyHandles := createRecipientsByKeyType(t, k, 3, tc.keyType)
 
-			log.SetLevel("aries-framework/pkg/didcomm/packer/authcrypt", spilog.DEBUG)
+			log.SetLevel("aries-framework/pkg/didcomm/packer/authcrypt", log.DEBUG)
 
 			cryptoSvc, err := tinkcrypto.New()
 			require.NoError(t, err)
